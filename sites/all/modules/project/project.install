@@ -1,0 +1,282 @@
+<?php
+/**
+ * @file
+ * Install, update, and uninstall functions for the Project module.
+ */
+
+/**
+ * Implements hook_install().
+ */
+function project_install() {
+  require_once(dirname(__FILE__) . '/includes/project_node_type.inc');
+  $t = get_t();
+
+  /**
+   * Set up project-specific field for project type.
+   */
+  $project_type = array(
+    'entity_types' => array('node'),
+    'type' => 'list_text',
+    'field_name' => 'field_project_type',
+    'label' => $t('Project type'),
+    'settings' => array(
+      'allowed_values' => array(
+        'full' => $t('Full project'),
+        'sandbox' => $t('Sandbox project'),
+      ),
+      'allowed_values_function' => '',
+    ),
+    'cardinality' => 1,
+  );
+  field_create_field($project_type);
+
+  project_install_default_project_node_type();
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function project_uninstall() {
+  // TODO: should we delete these fields as part of uninstall, or not?
+  // This kills the field and all of the field data.
+  // Also, should we delete the project_node_type node type?
+  require_once(dirname(__FILE__) . '/includes/project_node_type.inc');
+  project_uninstall_default_project_node_type();
+  field_delete_field('field_project_type');
+  watchdog('project', 'Deleted the :field_name field from all content type instances.', array(':field_name' => 'field_project_type'));
+
+  // Delete the project_behavior settings for all node types.
+  foreach (node_type_get_types() as $type) {
+    variable_del('project_behavior_' . $type->type);
+  }
+}
+
+/**
+ * Implements hook_schema().
+ */
+function project_schema() {
+  return array(
+    'project_maintainer' => array(
+      'description' => t('Users who have various per-project maintainer permissions.'),
+      'fields' => array(
+        'nid' => array(
+          'description' => t('Foreign key: node.nid of the project.'),
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'default' => 0,
+        ),
+        'uid' => array(
+          'description' => t('Foreign key: {users}.uid of a user with any project maintainer permissions.'),
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'default' => 0,
+        ),
+        'update_project' => array(
+          'description' => t('Can this user update(edit) the given project and modify its settings.'),
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'default' => 0,
+        ),
+        'administer_maintainers' => array(
+          'description' => t('Can this user manipulate the maintainers for the given project.'),
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'default' => 0,
+        ),
+      ),
+      'primary key' => array('nid', 'uid'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_update_dependencies().
+ */
+function project_update_dependencies() {
+  $dependencies = array();
+  // @todo Figure out how to make this conditional...
+  $dependencies['project'][7000] = array(
+    'profile' => 7001,
+  );
+  return $dependencies;
+}
+
+/**
+ * Ensure project node type is properly set up.
+ */
+function project_update_7000() {
+  require_once(dirname(__FILE__) . '/includes/project_node_type.inc');
+  $t = get_t();
+
+  // Enable new dependencies.
+  module_enable(array('machine_name', 'list'));
+  drupal_flush_all_caches();
+
+  /**
+   * Set up project-specific field for project type.
+   */
+  if (!field_info_field('field_project_type')) {
+    $project_type = array(
+      'entity_types' => array('node'),
+      'type' => 'list_text',
+      'field_name' => 'field_project_type',
+      'label' => $t('Project type'),
+      'settings' => array(
+        'allowed_values' => array(
+          'full' => $t('Full project'),
+          'sandbox' => $t('Sandbox project'),
+        ),
+        'allowed_values_function' => '',
+      ),
+      'cardinality' => 1,
+    );
+    field_create_field($project_type);
+  }
+
+  project_install_default_project_node_type();
+  node_types_rebuild();
+}
+
+/**
+ * Rename edit_project to update_project in {project_maintainer}.
+ */
+function project_update_7001() {
+  if (db_field_exists('project_maintainer', 'edit_project')) {
+    db_add_field('project_maintainer', 'update_project', array(
+      'description' => t('Can this user update(edit) the given project and modify its settings.'),
+      'type' => 'int',
+      'unsigned' => TRUE,
+      'not null' => TRUE,
+      'default' => 0,
+    ));
+    db_update('project_maintainer')
+      ->expression('update_project', 'edit_project')
+      ->execute();
+    db_drop_field('project_maintainer', 'edit_project');
+  }
+}
+
+/**
+ * Finish renaming 'project_project' node type to 'project', move some {project_projects} data into fields.
+ */
+function project_update_7002() {
+  $t = get_t();
+  // Check if we need to run.
+  if (!db_table_exists('project_projects')) {
+    return $t('No legacy data detected, skipping this update.');
+  }
+
+  // Update the node type in the database.
+  db_update('node')
+    ->condition('type', 'project_project')
+    ->fields(array('type' => 'project'))
+    ->execute();
+
+  // We are using bare queries here for speed reasons.
+
+  // Bulk convert uri -> field_project_machine_name.
+  $query = db_select('project_projects', 'p');
+  $query->innerJoin('node', 'n', 'p.nid = n.nid');
+  $query->addExpression(':entity_type', 'entity_type', array(':entity_type' => 'node'));
+  $query->addExpression(':bundle', 'bundle', array(':bundle' => 'project'));
+  $query->addExpression(':deleted', 'deleted', array(':deleted' => 0));
+  $query->addField('p', 'nid', 'entity_id');
+  $query->addField('n', 'vid', 'revision_id');
+  $query->addExpression(':language', 'language', array(':language' => LANGUAGE_NONE));
+  $query->addExpression(':delta', 'delta', array(':delta' => 0));
+  $query->addField('p', 'uri', 'field_project_machine_name_value');
+
+  db_insert('field_data_field_project_machine_name')
+    ->from($query)
+    ->execute();
+
+  $query = db_select('project_projects', 'p');
+  $query->innerJoin('node_revision', 'n', 'p.nid = n.nid');
+  $query->addExpression(':entity_type', 'entity_type', array(':entity_type' => 'node'));
+  $query->addExpression(':bundle', 'bundle', array(':bundle' => 'project'));
+  $query->addExpression(':deleted', 'deleted', array(':deleted' => 0));
+  $query->addField('p', 'nid', 'entity_id');
+  $query->addField('n', 'vid', 'revision_id');
+  $query->addExpression(':language', 'language', array(':language' => LANGUAGE_NONE));
+  $query->addExpression(':delta', 'delta', array(':delta' => 0));
+  $query->addField('p', 'uri', 'field_project_machine_name_value');
+
+  db_insert('field_revision_field_project_machine_name')
+    ->from($query)
+    ->execute();
+
+  // Bulk convert sandbox -> project_type
+  $query = db_select('project_projects', 'p');
+  $query->innerJoin('node', 'n', 'p.nid = n.nid');
+  $query->addExpression(':entity_type', 'entity_type', array(':entity_type' => 'node'));
+  $query->addExpression(':bundle', 'bundle', array(':bundle' => 'project'));
+  $query->addExpression(':deleted', 'deleted', array(':deleted' => 0));
+  $query->addField('p', 'nid', 'entity_id');
+  $query->addField('n', 'vid', 'revision_id');
+  $query->addExpression(':language', 'language', array(':language' => LANGUAGE_NONE));
+  $query->addExpression(':delta', 'delta', array(':delta' => 0));
+  $query->addExpression('CASE WHEN p.sandbox = 0 THEN :full ELSE :sandbox END', 'field_project_type_value', array(':sandbox' => 'sandbox', ':full' => 'full'));
+
+  db_insert('field_data_field_project_type')
+    ->from($query)
+    ->execute();
+
+  $query = db_select('project_projects', 'p');
+  $query->innerJoin('node_revision', 'n', 'p.nid = n.nid');
+  $query->addExpression(':entity_type', 'entity_type', array(':entity_type' => 'node'));
+  $query->addExpression(':bundle', 'bundle', array(':bundle' => 'project'));
+  $query->addExpression(':deleted', 'deleted', array(':deleted' => 0));
+  $query->addField('p', 'nid', 'entity_id');
+  $query->addField('n', 'vid', 'revision_id');
+  $query->addExpression(':language', 'language', array(':language' => LANGUAGE_NONE));
+  $query->addExpression(':delta', 'delta', array(':delta' => 0));
+  $query->addExpression('CASE WHEN p.sandbox = 0 THEN :full ELSE :sandbox END', 'field_project_type_value', array(':sandbox' => 'sandbox', ':full' => 'full'));
+
+  db_insert('field_revision_field_project_type')
+    ->from($query)
+    ->execute();
+
+  // Since we have manually injected data, we need to explicitly clear the field cache.
+  field_cache_clear();
+
+  // Also ensure the node types cache is rebuilt.
+  node_types_rebuild();
+}
+
+
+/**
+ * Ensure the views are reverted to code.
+ */
+function project_update_7003() {
+  ctools_include('object-cache');
+  foreach (array('project_index', 'project_overview', 'project_types') as $viewname) {
+    $view = views_get_view($viewname);
+    if ($view->type == t('Overridden')) {
+      // Revert the view.
+      $view->delete();
+      // Clear its cache.
+      ctools_object_cache_clear('view', $view->name);
+    }
+  }
+}
+
+/**
+ * Clean up more fallout from the node type rename.
+ */
+function project_update_7004() {
+  $result = db_query('SELECT field_name FROM {field_config_instance} WHERE entity_type = :entity_type AND bundle = :bundle', array(':entity_type' => 'node', ':bundle' => 'project_project'))->fetchCol();
+  foreach ($result as $field) {
+    // @todo field name security check?
+    db_query("UPDATE {field_data_" . $field . "} SET bundle = :newbundle WHERE bundle = :oldbundle", array(':newbundle' => 'project', ':oldbundle' => 'project_project'));
+    db_query("UPDATE {field_revision_" . $field . "} SET bundle = :newbundle WHERE bundle = :oldbundle", array(':newbundle' => 'project', ':oldbundle' => 'project_project'));
+    if ($field != 'body') {
+      // Update the instance config.
+      db_query("UPDATE {field_config_instance} SET bundle = :newbundle WHERE field_name = :name AND entity_type = :type AND bundle = :oldbundle", array(':newbundle' => 'project', ':name' => $field, ':type' => 'node', ':oldbundle' => 'project_project'));
+    }
+  }
+  field_cache_clear();
+}

@@ -1,0 +1,60 @@
+html, a {
+	cursor:url(cursor.png),auto;
+}
+body {
+	background: #FCF5D9;
+	font-family: Monaco, Consolas, "Lucida Console", monospace;
+}
+a, a:link, a:visited, #site-name a:hover {
+	background: black;
+	color: #FCF5D9;
+	text-decoration: none;
+}
+a:hover, li a.active:hover, a.feed-icon {
+	background: none;
+	color: black;
+}
+li a.active {
+	background: none;
+	color: black;
+}
+::selection, ::-moz-selection {
+  background: black;
+  color: #FCF5D9;
+}
+
+
+/**
+ * In template.php we set the ascii art site name.
+ * It will crash and burn on small screens without these media queries.
+ */
+#site-name a {
+	display: block;
+	background: none;
+	color: black;
+}
+@media only screen and (max-width: 1250px) {
+  #site-name a {
+  	font-size: 14px;
+  }
+}
+@media only screen and (max-width: 1000px) {
+  #site-name a {
+  	font-size: 10px;
+  }
+}
+@media only screen and (max-width: 800px) {
+  #site-name a {
+  	font-size: 8px;
+  }
+}
+@media only screen and (max-width: 650px) {
+  #site-name a {
+  	font-size: 6px;
+  }
+}
+@media only screen and (max-width: 520px) {
+  #site-name a {
+  	font-size: 4px;
+  }
+}

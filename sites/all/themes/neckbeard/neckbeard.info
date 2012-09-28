@@ -1,0 +1,4 @@
+name = Neckbeard
+core = 7.x
+stylesheets[all][] = layout.css
+stylesheets[all][] = style.css
